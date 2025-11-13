@@ -15,13 +15,40 @@ from bson.objectid import ObjectId
 
 @st.cache_resource
 def get_db():
-    if "mongo" not in st.secrets:
-        st.error("MongoDB secrets not found. Please add them in Streamlit Cloud settings.")
+    import toml, os
+    from pymongo import MongoClient
+
+    uri, dbname = None, None
+
+    # --- Try Streamlit secrets first, safely ---
+    try:
+        if "mongo" in st.secrets:
+            uri = st.secrets["mongo"]["uri"]
+            dbname = st.secrets["mongo"]["db"]
+    except Exception:
+        pass  # No Streamlit secrets found, continue to fallback
+
+    # --- Fallback: check Render Secret Files (/etc/secrets/secrets.toml) ---
+    if not uri:
+        secret_path = "/etc/secrets/secrets.toml"
+        if os.path.exists(secret_path):
+            secrets = toml.load(secret_path)
+            uri = secrets["mongo"]["uri"]
+            dbname = secrets["mongo"]["db"]
+        else:
+            st.error("❌ No secrets found. Please add `secrets.toml` in Render Secret Files.")
+            st.stop()
+
+    # --- Connect to MongoDB ---
+    try:
+        client = MongoClient(uri)
+        db = client[dbname]
+        client.admin.command("ping")  # test connection
+        st.sidebar.success("✅ Connected to MongoDB")
+        return db
+    except Exception as e:
+        st.sidebar.error(f"❌ Failed to connect to MongoDB: {e}")
         st.stop()
-    uri = st.secrets["mongo"]["uri"]
-    dbname = st.secrets["mongo"]["db"]
-    client = MongoClient(uri)
-    return client[dbname]
 
 db = get_db()
 users_col = db.users
