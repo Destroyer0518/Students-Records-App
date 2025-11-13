@@ -3,21 +3,16 @@ from pymongo import MongoClient
 from datetime import datetime
 import pandas as pd
 import bcrypt
+import toml
+import os
 from bson.objectid import ObjectId
 
 # ---------------------------
 # Configuration / DB Connect
 # ---------------------------
-# Expect streamlit secrets in the following format (see instructions below):
-# [mongo]
-# uri = "mongodb+srv://user:pass@cluster/?retryWrites=true&w=majority"
-# db = "school_db"
 
 @st.cache_resource
 def get_db():
-    import toml, os
-    from pymongo import MongoClient
-
     uri, dbname = None, None
 
     # --- Try Streamlit secrets first, safely ---
@@ -56,6 +51,7 @@ students_col = db.students
 attendance_col = db.attendance
 exams_col = db.exams
 
+
 # ---------------------------
 # Utilities
 # ---------------------------
@@ -89,6 +85,7 @@ def authenticate(username, password):
         return True, {"_id": str(user["_id"]), "username": user["username"], "role": user.get("role", "user")}
     return False, None
 
+
 # ---------------------------
 # Create initial admin if none exists
 # ---------------------------
@@ -101,6 +98,7 @@ if users_col.count_documents({"role": "admin"}) == 0:
             "created_at": datetime.utcnow()
         })
 
+
 # ---------------------------
 # Session state helpers
 # ---------------------------
@@ -108,6 +106,7 @@ if "logged_in" not in st.session_state:
     st.session_state["logged_in"] = False
 if "user_info" not in st.session_state:
     st.session_state["user_info"] = None
+
 
 # ---------------------------
 # UI: Login Page
@@ -144,6 +143,7 @@ def login_page():
                     st.success(msg)
                 else:
                     st.error(msg)
+
 
 # ---------------------------
 # Admin Page
@@ -183,246 +183,6 @@ def admin_page(user_info):
         st.session_state["user_info"] = None
         st.rerun()
 
-# ---------------------------
-# User Page
-# ---------------------------
-
-def user_page(user_info):
-    st.sidebar.title("Navigation")
-    menu = st.sidebar.radio("Go to", ["Students", "Attendance", "Exams", "Report Card", "Export / Tools", "Logout"])
-
-    st.title("👩‍🎓 User Dashboard")
-    st.write(f"Logged in as: {user_info['username']}")
-
-    if menu == "Students":
-        st.header("Manage Students")
-        with st.form("add_student"):
-            name = st.text_input("Student Name")
-            roll = st.text_input("Roll / ID")
-            klass = st.text_input("Class / Grade")
-            submit = st.form_submit_button("Add / Update Student")
-            if submit:
-                if not name or not roll:
-                    st.error("Name and Roll ID required")
-                else:
-                    students_col.update_one({"roll": roll}, {"$set": {"name": name, "class": klass, "updated_at": datetime.utcnow()}}, upsert=True)
-                    st.success("Student saved")
-
-        st.subheader("All Students")
-        students = list(students_col.find())
-        if students:
-            df = pd.DataFrame(students)
-            df["_id"] = df["_id"].astype(str)
-            st.dataframe(df)
-        else:
-            st.info("No students yet")
-
-    elif menu == "Attendance":
-        st.header("Record Attendance")
-        students = list(students_col.find())
-        if not students:
-            st.info("Please add students first")
-        else:
-            df_students = pd.DataFrame(students)
-            selected = st.multiselect("Select student rolls to mark present", df_students["roll"].tolist())
-            date = st.date_input("Attendance Date", datetime.today())
-            submit = st.button("Save Attendance")
-            if submit:
-                for roll in selected:
-                    attendance_col.update_one({"roll": roll, "date": date.isoformat()}, {"$set": {"present": True, "updated_by": user_info['username'], "timestamp": datetime.utcnow()}}, upsert=True)
-                st.success(f"Saved attendance for {len(selected)} students on {date}")
-
-        st.subheader("View Attendance")
-        with st.form("view_attendance"):
-            v_roll = st.text_input("Roll (leave blank for all)")
-            v_from = st.date_input("From", datetime.today())
-            v_to = st.date_input("To", datetime.today())
-            v_submit = st.form_submit_button("View")
-            if v_submit:
-                query = {"date": {"$gte": v_from.isoformat(), "$lte": v_to.isoformat()}}
-                if v_roll:
-                    query["roll"] = v_roll
-                rows = list(attendance_col.find(query))
-                if rows:
-                    df = pd.DataFrame(rows)
-                    df["_id"] = df["_id"].astype(str)
-                    st.dataframe(df)
-                else:
-                    st.info("No attendance records found")
-
-    elif menu == "Exams":
-import streamlit as st
-from pymongo import MongoClient
-from datetime import datetime
-import pandas as pd
-import bcrypt
-import toml
-import os
-from bson.objectid import ObjectId
-
-# ---------------------------
-# Configuration / DB Connect
-# ---------------------------
-
-@st.cache_resource
-def get_db():
-    # --- Option 1: Streamlit secrets (local or Streamlit Cloud) ---
-    if "mongo" in st.secrets:
-        uri = st.secrets["mongo"]["uri"]
-        dbname = st.secrets["mongo"]["db"]
-    else:
-        # --- Option 2: Fallback for Render Secret Files (/etc/secrets/secrets.toml) ---
-        secret_path = "/etc/secrets/secrets.toml"
-        if os.path.exists(secret_path):
-            secrets = toml.load(secret_path)
-            uri = secrets["mongo"]["uri"]
-            dbname = secrets["mongo"]["db"]
-        else:
-            st.error("❌ No MongoDB secrets found. Please add secrets.toml in Render dashboard.")
-            st.stop()
-
-    try:
-        client = MongoClient(uri)
-        db = client[dbname]
-        client.admin.command("ping")
-        st.sidebar.success("✅ Connected to MongoDB")
-        return db
-    except Exception as e:
-        st.sidebar.error(f"❌ MongoDB connection failed: {e}")
-        st.stop()
-
-db = get_db()
-users_col = db.users
-students_col = db.students
-attendance_col = db.attendance
-exams_col = db.exams
-
-# ---------------------------
-# Utilities
-# ---------------------------
-
-def hash_password(password: str) -> bytes:
-    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt())
-
-def verify_password(password: str, hashed: bytes) -> bool:
-    try:
-        return bcrypt.checkpw(password.encode("utf-8"), hashed)
-    except Exception:
-        return False
-
-def create_user(username, password, role="user"):
-    if users_col.find_one({"username": username}):
-        return False, "Username already exists"
-    hashed = hash_password(password)
-    users_col.insert_one({
-        "username": username,
-        "password": hashed,
-        "role": role,
-        "created_at": datetime.utcnow()
-    })
-    return True, "User created"
-
-def authenticate(username, password):
-    user = users_col.find_one({"username": username})
-    if not user:
-        return False, None
-    if verify_password(password, user["password"]):
-        return True, {"_id": str(user["_id"]), "username": user["username"], "role": user.get("role", "user")}
-    return False, None
-
-# ---------------------------
-# Create initial admin if none exists
-# ---------------------------
-if users_col.count_documents({"role": "admin"}) == 0:
-    if not users_col.find_one({"username": "admin"}):
-        users_col.insert_one({
-            "username": "admin",
-            "password": hash_password("admin123"),
-            "role": "admin",
-            "created_at": datetime.utcnow()
-        })
-
-# ---------------------------
-# Session state helpers
-# ---------------------------
-if "logged_in" not in st.session_state:
-    st.session_state["logged_in"] = False
-if "user_info" not in st.session_state:
-    st.session_state["user_info"] = None
-
-# ---------------------------
-# UI: Login Page
-# ---------------------------
-
-def login_page():
-    st.title("🎓 Students Attendance & Exam Records")
-    st.subheader("Login Portal")
-    role_choice = st.radio("Login as", ("user", "admin"))
-    username = st.text_input("Username")
-    password = st.text_input("Password", type="password")
-
-    col1, col2 = st.columns([1, 1])
-    with col1:
-        if st.button("Login"):
-            ok, info = authenticate(username, password)
-            if ok:
-                if info["role"] != role_choice:
-                    st.error(f"User is not registered as {role_choice}")
-                else:
-                    st.session_state["logged_in"] = True
-                    st.session_state["user_info"] = info
-                    st.success(f"Logged in as {info['username']} ({info['role']})")
-                    st.rerun()
-            else:
-                st.error("Invalid credentials")
-    with col2:
-        if st.button("Sign up as user"):
-            if not username or not password:
-                st.error("Provide username and password to sign up")
-            else:
-                ok, msg = create_user(username, password, role="user")
-                if ok:
-                    st.success(msg)
-                else:
-                    st.error(msg)
-
-# ---------------------------
-# Admin Page
-# ---------------------------
-
-def admin_page(user_info):
-    st.title("🛠️ Admin Dashboard")
-    st.write(f"Signed in as: {user_info['username']}")
-
-    st.header("Create New User")
-    with st.form("create_user_form"):
-        new_username = st.text_input("New username")
-        new_password = st.text_input("New password", type="password")
-        new_role = st.selectbox("Role", ("user", "admin"))
-        submitted = st.form_submit_button("Create user")
-        if submitted:
-            if not new_username or not new_password:
-                st.error("Both username and password are required")
-            else:
-                ok, msg = create_user(new_username, new_password, new_role)
-                if ok:
-                    st.success(msg)
-                else:
-                    st.error(msg)
-
-    st.header("Existing users")
-    users = list(users_col.find({}, {"password": 0}))
-    if users:
-        df = pd.DataFrame(users)
-        df["_id"] = df["_id"].astype(str)
-        st.dataframe(df)
-    else:
-        st.info("No users yet")
-
-    if st.button("Logout"):
-        st.session_state["logged_in"] = False
-        st.session_state["user_info"] = None
-        st.rerun()
 
 # ---------------------------
 # User Page
@@ -446,7 +206,11 @@ def user_page(user_info):
                 if not name or not roll:
                     st.error("Name and Roll ID required")
                 else:
-                    students_col.update_one({"roll": roll}, {"$set": {"name": name, "class": klass, "updated_at": datetime.utcnow()}}, upsert=True)
+                    students_col.update_one(
+                        {"roll": roll},
+                        {"$set": {"name": name, "class": klass, "updated_at": datetime.utcnow()}},
+                        upsert=True
+                    )
                     st.success("Student saved")
 
         st.subheader("All Students")
@@ -470,7 +234,11 @@ def user_page(user_info):
             submit = st.button("Save Attendance")
             if submit:
                 for roll in selected:
-                    attendance_col.update_one({"roll": roll, "date": date.isoformat()}, {"$set": {"present": True, "updated_by": user_info['username'], "timestamp": datetime.utcnow()}}, upsert=True)
+                    attendance_col.update_one(
+                        {"roll": roll, "date": date.isoformat()},
+                        {"$set": {"present": True, "updated_by": user_info['username'], "timestamp": datetime.utcnow()}},
+                        upsert=True
+                    )
                 st.success(f"Saved attendance for {len(selected)} students on {date}")
 
         st.subheader("View Attendance")
@@ -502,7 +270,14 @@ def user_page(user_info):
             exam_date = st.date_input("Exam Date", datetime.today())
             submitted = st.form_submit_button("Save Marks")
             if submitted:
-                exams_col.insert_one({"roll": roll, "subject": subject, "marks": float(marks), "date": exam_date.isoformat(), "entered_by": user_info['username'], "timestamp": datetime.utcnow()})
+                exams_col.insert_one({
+                    "roll": roll,
+                    "subject": subject,
+                    "marks": float(marks),
+                    "date": exam_date.isoformat(),
+                    "entered_by": user_info['username'],
+                    "timestamp": datetime.utcnow()
+                })
                 st.success("Marks saved")
 
         st.subheader("All Exam Records")
@@ -557,6 +332,7 @@ def user_page(user_info):
         st.session_state["user_info"] = None
         st.rerun()
 
+
 # ---------------------------
 # Main
 # ---------------------------
@@ -572,4 +348,4 @@ def main():
             user_page(info)
 
 if __name__ == "__main__":
-    main()
+    main()                                                      
