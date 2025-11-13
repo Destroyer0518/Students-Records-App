@@ -177,6 +177,45 @@ def admin_page(user_info):
         st.dataframe(df)
     else:
         st.info("No users yet")
+        # ---------------------------
+    # Change Admin Credentials
+    # ---------------------------
+    st.header("Change Admin Credentials")
+    with st.form("change_admin_credentials"):
+        new_admin_user = st.text_input("New Admin Username")
+        new_admin_pass = st.text_input("New Admin Password", type="password")
+        submitted = st.form_submit_button("Update Admin Credentials")
+        if submitted:
+            if not new_admin_user or not new_admin_pass:
+                st.error("Both username and password are required")
+            else:
+                users_col.update_one(
+                    {"role": "admin"},
+                    {"$set": {
+                        "username": new_admin_user,
+                        "password": hash_password(new_admin_pass),
+                        "updated_at": datetime.utcnow()
+                    }}
+                )
+                st.success("Admin credentials updated successfully. Please log in again.")
+                st.session_state["logged_in"] = False
+                st.session_state["user_info"] = None
+                st.rerun()
+
+    # ---------------------------
+    # Delete User
+    # ---------------------------
+    st.header("Delete User")
+    all_users = list(users_col.find({}, {"username": 1, "role": 1}))
+    if all_users:
+        usernames = [u["username"] for u in all_users if u["username"] != "admin"]
+        selected_user = st.selectbox("Select user to delete", usernames)
+        if st.button("Delete User"):
+            users_col.delete_one({"username": selected_user})
+            st.success(f"User '{selected_user}' deleted successfully.")
+            st.rerun()
+    else:
+        st.info("No users to delete.")
 
     if st.button("Logout"):
         st.session_state["logged_in"] = False
